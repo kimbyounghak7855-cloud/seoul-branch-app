@@ -91,6 +91,11 @@ body {
   font-size: 13px; margin-bottom: 8px; box-sizing: border-box;
 }
 
+.route-origin-fixed-row {
+  display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted);
+  margin-bottom: 6px; cursor: pointer;
+}
+
 .upcoming-list, .branch-list, .route-result-list, .user-list { list-style: none; padding: 0; margin: 0; }
 .upcoming-list li, .branch-list li, .user-list li {
   padding: 8px; border-radius: 8px; margin-bottom: 4px; cursor: pointer; font-size: 13px;

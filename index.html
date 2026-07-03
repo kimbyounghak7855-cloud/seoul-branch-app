@@ -137,6 +137,10 @@
             <button id="optimize-route-btn" class="btn-small">동선 최적화</button>
           </div>
           <p class="hint">목록에서 체크한 지점들의 방문 순서를 추천합니다.</p>
+          <label class="route-origin-fixed-row">
+            <input type="checkbox" id="route-origin-fixed" checked />
+            출발지 고정 사용 (해제 시 체크된 지점들만으로 가장 효율적인 동선을 계산)
+          </label>
           <input type="text" id="route-origin-address" class="route-origin-input" placeholder="출발지 주소 또는 상호명 (예: 한국의료환경)" />
           <ol id="route-result-list" class="route-result-list"></ol>
           <div id="route-summary" class="route-summary"></div>

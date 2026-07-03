@@ -221,12 +221,13 @@ function getFilteredBranches() {
 
 // ---------- 렌더링 ----------
 
+// 지도에는 목록에서 체크한 지점만 표시합니다(체크 안 하면 지도에서 숨김).
 function renderAll() {
   const filtered = getFilteredBranches();
   renderBranchList(filtered);
   renderUpcoming(allBranches);
   if (window.MapModule.isReady()) {
-    window.MapModule.renderMarkers(filtered, openEditModal);
+    window.MapModule.renderMarkers(filtered.filter((b) => selectedBranchIds.has(b.id)), openEditModal);
   }
   $("#branch-count").textContent = filtered.length;
 }
@@ -301,12 +302,19 @@ function renderBranchList(branches) {
       li.querySelector(".select-branch").addEventListener("change", (e) => {
         if (e.target.checked) {
           selectedBranchIds.add(b.id);
-          // 체크하면 해당 지점 좌표로 지도를 이동시켜 위치를 바로 확인할 수 있게 합니다.
-          if (b.lat != null && b.lng != null) {
-            window.MapModule.focusBranch(b.id);
-          }
         } else {
           selectedBranchIds.delete(b.id);
+        }
+        // 지도에는 체크된 지점만 표시되므로, 체크 상태가 바뀔 때마다 마커를 다시 그립니다.
+        if (window.MapModule.isReady()) {
+          window.MapModule.renderMarkers(
+            getFilteredBranches().filter((x) => selectedBranchIds.has(x.id)),
+            openEditModal
+          );
+          // 체크하면 해당 지점 좌표로 지도를 이동시켜 위치를 바로 확인할 수 있게 합니다.
+          if (e.target.checked && b.lat != null && b.lng != null) {
+            window.MapModule.focusBranch(b.id);
+          }
         }
       });
       ul.appendChild(li);
@@ -600,6 +608,27 @@ async function geocodeWithRetry(address, maxAttempts = 3) {
   return null;
 }
 
+// 구글시트의 주소(F열)가 "관악구"처럼 구/시군구 수준만 있어 그대로 지오코딩하면
+// 부정확하거나 실패하는 경우를 위해, 상호명+지역(구)으로 실제 도로명주소를 찾아
+// 자동으로 보정합니다. PLACE_SEARCH_PROXY_URL이 설정되지 않았거나 검색에
+// 실패하면 원래 주소로 조용히 폴백합니다.
+async function resolveAddressForGeocode(name, address, region) {
+  const isAddressUnclear = !address || !/\d/.test(address);
+  if (isAddressUnclear && window.APP_CONFIG.PLACE_SEARCH_PROXY_URL && name) {
+    const query = [name, region].filter(Boolean).join(" ").trim();
+    try {
+      const resolved = await window.MapModule.resolveLocation(query);
+      if (resolved && resolved.matchedAddress) {
+        return { address: resolved.matchedAddress, coords: { lat: resolved.lat, lng: resolved.lng } };
+      }
+    } catch {
+      // 검색 실패 시 아래 기존 주소 지오코딩으로 폴백
+    }
+  }
+  if (!address) return { address, coords: null };
+  return { address, coords: await geocodeWithRetry(address) };
+}
+
 function initSheetSyncEvents() {
   $("#sync-sheet-btn").addEventListener("click", runSheetSync);
   const retryBtn = $("#retry-geocode-btn");
@@ -624,9 +653,11 @@ async function runBulkGeocodeRetry() {
     const branch = targets[i];
     statusEl.className = "sync-status";
     statusEl.textContent = `좌표 재검색 중... (${i + 1}/${targets.length})`;
-    const coords = await geocodeWithRetry(branch.address);
-    if (coords) {
-      await window.Store.updateBranch(branch.id, { lat: coords.lat, lng: coords.lng });
+    const resolved = await resolveAddressForGeocode(branch.name, branch.address, branch.sheetRegion);
+    if (resolved.coords) {
+      const update = { lat: resolved.coords.lat, lng: resolved.coords.lng };
+      if (resolved.address && resolved.address !== branch.address) update.address = resolved.address;
+      await window.Store.updateBranch(branch.id, update);
       fixed++;
     }
     await new Promise((r) => setTimeout(r, 350));
@@ -658,14 +689,17 @@ async function runSheetSync() {
     for (const row of newRows) {
       statusEl.textContent = `가져오는 중... (${added + 1}/${newRows.length})`;
       let coords = null;
-      if (window.APP_CONFIG.HAS_MAPS_KEY && row.address) {
-        coords = await geocodeWithRetry(row.address);
+      let resolvedAddress = row.address;
+      if (window.APP_CONFIG.HAS_MAPS_KEY) {
+        const resolved = await resolveAddressForGeocode(row.name, row.address, row.region);
+        resolvedAddress = resolved.address || row.address;
+        coords = resolved.coords;
         if (coords) geocoded++;
         await new Promise((r) => setTimeout(r, 350)); // Geocoding API 요청 속도 보호 (200ms→350ms, 대량 가져오기 시 빈번한 실패 방지)
       }
       await window.Store.addBranch({
         name: row.name,
-        address: row.address,
+        address: resolvedAddress,
         status: row.status,
         priority: "중",
         openDate: "",
@@ -702,10 +736,20 @@ async function runSheetSync() {
 // ---------- 동선 최적화 ----------
 
 function initRouteEvents() {
-  // 이전에 입력한 출발지 주소를 기억해두어 다음에도 다시 입력하지 않도록 합니다.
+  // 이전에 입력한 출발지 주소와 "출발지 고정" 사용 여부를 기억해둡니다.
   const originInput = $("#route-origin-address");
+  const originFixedCheckbox = $("#route-origin-fixed");
   const savedOrigin = localStorage.getItem("sba_route_origin_address");
   if (savedOrigin) originInput.value = savedOrigin;
+
+  const savedFixed = localStorage.getItem("sba_route_origin_fixed");
+  originFixedCheckbox.checked = savedFixed === null ? true : savedFixed === "true";
+  originInput.disabled = !originFixedCheckbox.checked;
+
+  originFixedCheckbox.addEventListener("change", () => {
+    originInput.disabled = !originFixedCheckbox.checked;
+    localStorage.setItem("sba_route_origin_fixed", String(originFixedCheckbox.checked));
+  });
 
   $("#optimize-route-btn").addEventListener("click", async () => {
     const selected = allBranches.filter((b) => selectedBranchIds.has(b.id) && b.lat != null);
@@ -713,26 +757,39 @@ function initRouteEvents() {
       alert("방문할 지점을 1개 이상 선택해주세요.");
       return;
     }
-    const address = originInput.value.trim();
-    if (!address) {
-      alert("출발지 주소를 입력해주세요.");
-      originInput.focus();
-      return;
-    }
+
     const statusEl = $("#route-summary");
-    statusEl.textContent = "출발지 확인 중...";
-    let origin;
-    try {
-      origin = await window.MapModule.resolveLocation(address);
-    } catch (err) {
-      statusEl.textContent = "";
-      alert(err.message);
-      return;
+    const useFixedOrigin = originFixedCheckbox.checked;
+    let origin = null;
+
+    if (useFixedOrigin) {
+      const address = originInput.value.trim();
+      if (!address) {
+        alert("출발지 주소를 입력하거나, '출발지 고정 사용' 체크를 해제해주세요.");
+        originInput.focus();
+        return;
+      }
+      statusEl.textContent = "출발지 확인 중...";
+      try {
+        origin = await window.MapModule.resolveLocation(address);
+      } catch (err) {
+        statusEl.textContent = "";
+        alert(err.message);
+        return;
+      }
+      if (origin.matchedName) {
+        statusEl.textContent = `출발지: ${origin.matchedName} (${origin.matchedAddress})`;
+      }
+      localStorage.setItem("sba_route_origin_address", address);
+    } else {
+      // 고정 출발지 없이, 체크된 지점들만으로 가장 효율적인 동선을 계산합니다.
+      if (selected.length < 2) {
+        alert("고정 출발지 없이 최적화하려면 지점을 2개 이상 선택해주세요.");
+        return;
+      }
+      statusEl.textContent = "등록지 기준 최적 동선 계산 중...";
     }
-    if (origin.matchedName) {
-      statusEl.textContent = `출발지: ${origin.matchedName} (${origin.matchedAddress})`;
-    }
-    localStorage.setItem("sba_route_origin_address", address);
+
     const result = await window.RouteEngine.computeOptimalRoute(origin, selected);
     renderRouteResult(result);
     window.MapModule.drawRoute(result.ordered, origin, result.routeGeometry);

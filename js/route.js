@@ -40,6 +40,8 @@ function nearestNeighborOrder(origin, points) {
   return ordered;
 }
 
+// origin이 없으면(고정 출발지 미사용) 등록된 지점들만으로 가장 효율적인
+// 경로(어디서 출발하든 총 이동거리가 가장 짧은 경로)를 계산합니다.
 async function computeOptimalRoute(origin, branches) {
   if (!branches.length) return { ordered: [], totalDistanceKm: 0, mode: "none" };
 
@@ -49,17 +51,31 @@ async function computeOptimalRoute(origin, branches) {
     console.warn("OSRM 동선 계산 실패, 직선거리 폴백 사용:", e);
   }
 
-  const ordered = nearestNeighborOrder(origin, branches);
+  if (origin) {
+    const ordered = nearestNeighborOrder(origin, branches);
+    const totalDistanceKm = ordered.reduce((sum, p) => sum + p.legDistanceKm, 0);
+    return { ordered, totalDistanceKm, mode: "straight-line" };
+  }
+
+  // 고정 출발지가 없는 폴백: 등록된 지점 중 첫 번째를 임시 시작점으로 삼아
+  // 나머지를 최근접 이웃 순서로 정렬합니다(완전한 최적해는 아니지만 합리적인 대체).
+  const [first, ...rest] = branches;
+  const restOrdered = nearestNeighborOrder(first, rest);
+  const ordered = [{ ...first, legDistanceKm: 0 }, ...restOrdered];
   const totalDistanceKm = ordered.reduce((sum, p) => sum + p.legDistanceKm, 0);
   return { ordered, totalDistanceKm, mode: "straight-line" };
 }
 
 async function computeWithOSRM(origin, branches) {
-  const points = [origin, ...branches];
+  // origin이 있으면 "source=first"로 출발지를 고정하고, 없으면 소스/목적지를
+  // 지정하지 않아(기본값 any/any) OSRM이 등록 지점들만으로 가장 효율적인
+  // 시작점과 순서를 스스로 찾도록 합니다.
+  const points = origin ? [origin, ...branches] : branches;
   const coordsStr = points.map((p) => `${p.lng},${p.lat}`).join(";");
+  const params = origin ? "source=first&roundtrip=false" : "roundtrip=false";
   const url =
     `https://router.project-osrm.org/trip/v1/driving/${coordsStr}` +
-    "?source=first&roundtrip=false&geometries=geojson&overview=full";
+    `?${params}&geometries=geojson&overview=full`;
 
   const res = await fetch(url);
   if (!res.ok) throw new Error("OSRM 요청 실패: " + res.status);
@@ -69,8 +85,9 @@ async function computeWithOSRM(origin, branches) {
   }
 
   const trip = data.trips[0];
-  // waypoints[0]은 출발지(origin), waypoints[1..]는 branches와 같은 순서로 대응됨
-  const branchWaypoints = data.waypoints.slice(1);
+  // origin이 있으면 waypoints[0]은 출발지이고 waypoints[1..]가 branches와 대응되며,
+  // origin이 없으면 waypoints가 branches와 그대로 1:1 대응됩니다.
+  const branchWaypoints = origin ? data.waypoints.slice(1) : data.waypoints;
   const order = branchWaypoints
     .map((wp, i) => ({ i, waypointIndex: wp.waypoint_index }))
     .sort((a, b) => a.waypointIndex - b.waypointIndex);

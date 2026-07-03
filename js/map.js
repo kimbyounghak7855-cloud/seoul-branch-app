@@ -226,7 +226,7 @@ function drawRoute(orderedBranches, origin, routeGeometry) {
     );
   } else {
     path = [
-      new naver.maps.LatLng(origin.lat, origin.lng),
+      ...(origin ? [new naver.maps.LatLng(origin.lat, origin.lng)] : []),
       ...orderedBranches.map((b) => new naver.maps.LatLng(b.lat, b.lng)),
     ];
   }
