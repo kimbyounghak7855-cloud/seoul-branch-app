@@ -27,7 +27,7 @@ python3 -m http.server 8080
 - **지도 표시 + 주소 → 좌표 검색("좌표 찾기")**: [네이버 지도 API v3](https://navermaps.github.io/maps.js.ncp/) (Naver Cloud Platform Maps). `index.html`의 `<script src="https://oapi.map.naver.com/openapi/v3/maps.js?ncpKeyId=...">`에 Client ID가 등록되어 있습니다.
   - NCP 콘솔(console.ncloud.com) > Maps > Application에 `seoul-branch-app`으로 등록되어 있으며, 대표 계정(kbh1443@naver.com) 기준 무료 이용량(Geocoding/Reverse Geocoding 각 300만 회/월, Dynamic Map 600만 회/월)이 적용됩니다.
   - Web 서비스 URL이 Application에 등록된 도메인과 다르면 인증 실패(401)가 발생하므로, 배포 도메인이 바뀌면 NCP 콘솔(console.ncloud.com > Maps > Application 수정)에서 Web 서비스 URL에 새 도메인을 추가해야 합니다.
-  - **현재 GitHub Pages 배포 도메인(`https://kimbyounghak7855-cloud.github.io`)이 Application에 등록되어 있지 않으면 지도/지오코딩이 인증 실패로 동작하지 않습니다.** 예전 Netlify 도메인에서 GitHub Pages로 옮긴 뒤 이 등록을 갱신하지 않은 것이 흔한 원인입니다. 등록되지 않은 경우 지도 영역에 인증 실패 안내가 표시됩니다(`index.html`의 `navermap_authFailure` 콜백).
+  - **현재 GitHub Pages 배포 주소(`https://kimbyounghak7855-cloud.github.io/seoul-branch-app/`)의 도메인(`https://kimbyounghak7855-cloud.github.io`)이 Application에 등록되어 있지 않으면 지도/지오코딩이 인증 실패로 동작하지 않습니다.** (NCP Web 서비스 URL 등록은 경로가 아닌 도메인 단위이므로, `/seoul-branch-app/` 경로는 별도로 등록할 필요가 없습니다.) 예전 Netlify 도메인에서 GitHub Pages로 옮긴 뒤 이 등록을 갱신하지 않은 것이 흔한 원인입니다. 등록되지 않은 경우 지도 영역에 인증 실패 안내가 표시됩니다(`index.html`의 `navermap_authFailure` 콜백).
 - **동선 최적화**: [OSRM](http://project-osrm.org/) 공개 데모 서버의 Trip API로 도로 기반 최적 순서를 계산합니다. 데모 서버는 무료이지만 공용 자원이라 응답이 느리거나 일시적으로 실패할 수 있으며, 이 경우 자동으로 직선거리 기준 최근접 이웃 휴리스틱으로 대체됩니다.
 - 트래픽이 매우 많아지면(예: 팀이 커지거나 매우 빈번한 동선 계산) [OSRM](http://project-osrm.org/#results) 사용 정책을 검토해, 필요시 자체 서버를 구축하는 것을 권장합니다.
 
