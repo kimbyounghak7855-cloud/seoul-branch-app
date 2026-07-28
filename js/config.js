@@ -37,6 +37,13 @@ window.APP_CONFIG = {
   // 설정 방법은 README.md와 google-apps-script/update-remarks.gs 참고.
   // 예: "https://script.google.com/macros/s/xxx/exec"
   SHEET_WRITE_PROXY_URL: "",
+
+  // 방문 기록(입장/퇴장/메모) + 지점(병원) 목록 전체를 방문기록 전용 구글시트
+  // ("방문기록" 탭 / "지점목록" 탭)에 자동 반영할 Apps Script 웹앱 주소.
+  // 비워두면 이 기능은 꺼지고(로컬 저장만 동작) 시트에는 반영되지 않습니다.
+  // 설정 방법은 README.md와 google-apps-script/visit-log.gs 참고.
+  // 예: "https://script.google.com/macros/s/yyy/exec"
+  DATA_SHEET_PROXY_URL: "",
 };
 
 // 키가 비어있거나 플레이스홀더면 데모(로컬 저장) 모드로 동작합니다.

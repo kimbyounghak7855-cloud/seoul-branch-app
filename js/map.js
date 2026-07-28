@@ -13,7 +13,6 @@ const STATUS_COLORS = {
   보류: "#ef4444",
   // 구글 시트("개원예정(메디잡)") 연동 병원의 진행현황
   영업중: "#06b6d4",
-  타업체계약: "#7c3aed",
 };
 
 let map = null;
@@ -21,18 +20,21 @@ let markers = {}; // id -> naver.maps.Marker
 let routeLayer = null;
 let pinDropCallback = null;
 
-function markerIconHtml(status) {
+// 경쟁사 거래처(엑셀 가져오기)는 출처를 한눈에 구분할 수 있도록 테두리 색을 다르게 표시합니다.
+function markerIconHtml(status, source) {
   const color = STATUS_COLORS[status] || "#6b7280";
+  const stroke = source === "competitor" ? "#7c3aed" : "#1f2937";
+  const strokeWidth = source === "competitor" ? 2.5 : 1;
   return `<div style="width:25px;height:33px;line-height:0;">
     <svg width="25" height="33" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-      <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z" fill="${color}" stroke="#1f2937" stroke-width="1"/>
+      <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z" fill="${color}" stroke="${stroke}" stroke-width="${strokeWidth}"/>
     </svg>
   </div>`;
 }
 
-function markerIcon(status) {
+function markerIcon(status, source) {
   return {
-    content: markerIconHtml(status),
+    content: markerIconHtml(status, source),
     size: new naver.maps.Size(25, 33),
     anchor: new naver.maps.Point(12, 32),
   };
@@ -84,12 +86,12 @@ function renderMarkers(branches, onMarkerClick) {
     const position = new naver.maps.LatLng(b.lat, b.lng);
     if (markers[b.id]) {
       markers[b.id].setPosition(position);
-      markers[b.id].setIcon(markerIcon(b.status));
+      markers[b.id].setIcon(markerIcon(b.status, b.source));
     } else {
       const marker = new naver.maps.Marker({
         position,
         map,
-        icon: markerIcon(b.status),
+        icon: markerIcon(b.status, b.source),
         title: b.name,
       });
       naver.maps.Event.addListener(marker, "click", () => onMarkerClick(b.id));

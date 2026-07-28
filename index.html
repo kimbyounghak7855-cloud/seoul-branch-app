@@ -80,6 +80,11 @@
         </section>
 
         <section class="panel">
+          <h2>최근 방문 기록</h2>
+          <ul id="recent-visits-list" class="upcoming-list"></ul>
+        </section>
+
+        <section class="panel">
           <h2>필터</h2>
           <div class="filter-row">
             <label>상태</label>
@@ -87,7 +92,6 @@
               <option value="">전체</option>
               <option value="영업중">영업중</option>
               <option value="계약완료">계약완료</option>
-              <option value="타업체계약">타업체계약</option>
               <option value="발굴">발굴</option>
               <option value="접촉중">접촉중</option>
               <option value="협의중">협의중</option>
@@ -109,11 +113,20 @@
               <option value="">전체</option>
             </select>
           </div>
+          <div class="filter-row">
+            <label>출처</label>
+            <select id="filter-source">
+              <option value="">전체</option>
+              <option value="sheet">개원예정(구글시트)</option>
+              <option value="competitor">경쟁사 거래처</option>
+              <option value="manual">직접 입력</option>
+            </select>
+          </div>
         </section>
 
         <section class="panel">
           <div class="panel-header-row">
-            <h2>구글 시트 연동</h2>
+            <h2>구글 시트 연동 (개원예정)</h2>
             <div>
               <button id="sync-sheet-btn" class="btn-small">시트 동기화</button>
               <button id="retry-geocode-btn" class="btn-small" title="좌표 미확인 지점을 모두 다시 검색합니다">전체 좌표 일괄 재검색</button>
@@ -125,8 +138,21 @@
 
         <section class="panel">
           <div class="panel-header-row">
+            <h2>경쟁사 거래처 가져오기</h2>
+            <button id="import-competitor-btn" class="btn-small">가져오기</button>
+          </div>
+          <p class="hint">현재 타업체(경쟁사)가 계약 중인 서울 지역 병원 명단을 지도/목록에 추가합니다(개원예정 시트와는 별개 출처, 지도에서는 보라색 테두리 마커로 구분됩니다). 좌표는 곧바로 조회되지 않으니, 가져온 뒤 위 "전체 좌표 일괄 재검색"으로 나눠서 채우세요.</p>
+          <div id="competitor-import-status" class="sync-status"></div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-header-row">
             <h2>지점 목록 (<span id="branch-count">0</span>)</h2>
-            <button id="add-branch-btn" class="btn-small btn-primary">+ 지점 추가</button>
+            <div>
+              <button id="select-all-branches-btn" class="btn-small">전체 선택</button>
+              <button id="deselect-all-branches-btn" class="btn-small">전체 해제</button>
+              <button id="add-branch-btn" class="btn-small btn-primary">+ 지점 추가</button>
+            </div>
           </div>
           <ul id="branch-list" class="branch-list"></ul>
         </section>
@@ -183,7 +209,6 @@
         <select id="branch-status">
           <option value="영업중">영업중</option>
           <option value="계약완료">계약완료</option>
-          <option value="타업체계약">타업체계약</option>
           <option value="발굴">발굴</option>
           <option value="접촉중">접촉중</option>
           <option value="협의중">협의중</option>
@@ -208,6 +233,30 @@
 
         <label>요구사항 / 메모</label>
         <textarea id="branch-requirements" rows="3" placeholder="예: 의료폐기물 처리 계약 조건, 특이사항 등"></textarea>
+
+        <div id="visit-log-section" class="visit-log" hidden>
+          <div class="panel-header-row">
+            <h3>방문 기록</h3>
+            <div>
+              <button type="button" id="visit-checkin-btn" class="btn-small btn-primary">입장</button>
+              <button type="button" id="visit-checkout-btn" class="btn-small">퇴장</button>
+            </div>
+          </div>
+          <ul id="visit-log-list" class="visit-log-list"></ul>
+        </div>
+
+        <div id="branch-competitor-info" class="sheet-info" hidden>
+          <h3>경쟁사 계약 정보 (엑셀 가져오기 시점 기준)</h3>
+          <dl>
+            <div><dt>계약중 업체</dt><dd id="competitor-info-name"></dd></div>
+            <div><dt>사업자번호</dt><dd id="competitor-info-biz"></dd></div>
+            <div><dt>대표자</dt><dd id="competitor-info-ceo"></dd></div>
+            <div><dt>전화번호</dt><dd id="competitor-info-phone"></dd></div>
+            <div><dt>계약시작일</dt><dd id="competitor-info-contract-start"></dd></div>
+            <div><dt>계약종료일</dt><dd id="competitor-info-contract-end"></dd></div>
+            <div><dt>계약조건</dt><dd id="competitor-info-terms"></dd></div>
+          </dl>
+        </div>
 
         <div id="branch-sheet-info" class="sheet-info" hidden>
           <h3>구글 시트 원본 정보</h3>
@@ -237,6 +286,7 @@
   <script type="module" src="js/notifications.js"></script>
   <script type="module" src="js/route.js"></script>
   <script type="module" src="js/sheets-import.js"></script>
+  <script type="module" src="js/competitor-import.js"></script>
   <script type="module" src="js/place-search.js"></script>
   <script type="module" src="js/map.js"></script>
   <script type="module" src="js/main.js"></script>

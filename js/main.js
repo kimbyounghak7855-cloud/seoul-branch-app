@@ -4,9 +4,12 @@
 
 let currentUser = null; // {uid/id, name, email, role}
 let allBranches = [];
+let allVisits = []; // 전체 지점의 방문 기록 (사이드바 "최근 방문 기록" 패널용)
 let selectedBranchIds = new Set();
 let pinDropTarget = null; // 모달 열려있는 동안 지도 클릭 좌표 저장용
 let lastGeocodedAddress = null; // 현재 pinDropTarget이 어떤 주소 기준으로 설정됐는지 추적 (주소 변경 시 자동 재검색용)
+let currentVisits = []; // 모달에 열려있는 지점의 방문 기록 (실시간 구독 결과)
+let visitsUnsub = null; // 모달이 열려있는 동안의 방문 기록 구독 해제 함수
 
 const $ = (sel) => document.querySelector(sel);
 const $all = (sel) => Array.from(document.querySelectorAll(sel));
@@ -85,6 +88,7 @@ function enterApp(user) {
   });
   window.Notifications.maybeRequestBrowserNotificationPermission();
   subscribeToData();
+  subscribeToVisits();
   // 관리자 여부와 무관하게 항상 구독합니다. 관리자가 다른 기기/창에서
   // 나(또는 다른 사용자)를 탈퇴시키면 실시간으로 감지해 즉시 로그아웃시키기 위함입니다.
   subscribeToUsers();
@@ -103,6 +107,13 @@ async function subscribeToData() {
     allBranches = branches;
     refreshAssigneeFilterOptions(branches);
     renderAll();
+  });
+}
+
+async function subscribeToVisits() {
+  await window.Store.onAllVisitsChange((visits) => {
+    allVisits = visits;
+    renderRecentVisits();
   });
 }
 
@@ -201,19 +212,25 @@ function refreshAssigneeFilterOptions(branches) {
   sel.value = current;
 }
 
+function branchSource(b) {
+  return b.source === "sheet" || b.source === "competitor" ? b.source : "manual";
+}
+
 function getFilteredBranches() {
   const status = $("#filter-status").value;
   const priority = $("#filter-priority").value;
   const assignee = $("#filter-assignee").value;
+  const source = $("#filter-source").value;
   return allBranches.filter(
     (b) =>
       (!status || b.status === status) &&
       (!priority || b.priority === priority) &&
-      (!assignee || b.assignee === assignee)
+      (!assignee || b.assignee === assignee) &&
+      (!source || branchSource(b) === source)
   );
 }
 
-["filter-status", "filter-priority", "filter-assignee"].forEach((id) => {
+["filter-status", "filter-priority", "filter-assignee", "filter-source"].forEach((id) => {
   document.addEventListener("DOMContentLoaded", () => {
     $("#" + id).addEventListener("change", renderAll);
   });
@@ -240,22 +257,28 @@ function statusBadgeClass(status) {
     계약완료: "green",
     보류: "red",
     영업중: "cyan",
-    타업체계약: "purple",
   };
   return "badge badge-" + (map[status] || "gray");
 }
 
-// 지점을 "개원 예정 월" 기준으로 그룹화하기 위한 키 (YYYY-MM 형식).
+// 지점을 그룹화하기 위한 키 (YYYY-MM 형식).
 // 구글 시트에서 가져온 지점은 sheetExpectedOpenMonth를, 직접 입력한 지점은
-// 개업 예정일(openDate)의 연-월을 사용합니다. 둘 다 없으면 맨 뒤로 보냅니다.
+// 개업 예정일(openDate)의 연-월을 사용합니다. 경쟁사 거래처는 경쟁사 계약종료월
+// 기준으로 묶어 "이 달에 계약이 끝나는 병원"을 한눈에 보이게 합니다.
+// 아무 기준도 없으면 맨 뒤로 보냅니다.
 function branchGroupKey(b) {
+  if (b.source === "competitor") {
+    return b.competitorContractEnd ? b.competitorContractEnd.slice(0, 7) : "9999-99";
+  }
   if (b.sheetExpectedOpenMonth) return b.sheetExpectedOpenMonth;
   if (b.openDate) return b.openDate.slice(0, 7);
   return "9999-99";
 }
 
-function branchGroupLabel(key) {
-  return key === "9999-99" ? "개원월 미정" : `${key} 개원예정`;
+function branchGroupLabel(key, groupBranches) {
+  if (key === "9999-99") return "미정";
+  const isCompetitorGroup = groupBranches.every((b) => b.source === "competitor");
+  return isCompetitorGroup ? `${key} 경쟁사 계약만료` : `${key} 개원예정`;
 }
 
 function renderBranchList(branches) {
@@ -274,7 +297,7 @@ function renderBranchList(branches) {
     const groupBranches = groups.get(key);
     const header = document.createElement("li");
     header.className = "branch-group-header";
-    header.textContent = `${branchGroupLabel(key)} (${groupBranches.length})`;
+    header.textContent = `${branchGroupLabel(key, groupBranches)} (${groupBranches.length})`;
     ul.appendChild(header);
 
     groupBranches.forEach((b) => {
@@ -292,6 +315,7 @@ function renderBranchList(branches) {
           ${b.openDate ? `<span>개업 ${b.openDate}</span>` : ""}
           ${b.contractStartDate ? `<span>계약시작 ${b.contractStartDate}</span>` : ""}
           ${b.assignee ? `<span>담당 ${b.assignee}</span>` : ""}
+          ${b.source === "competitor" ? `<span>경쟁사 ${b.competitorName || "-"} · 만료 ${b.competitorContractEnd || "-"}</span>` : ""}
           ${b.lat == null ? `<span class="needs-geocode-icon">⚠ 좌표 미확인</span>` : ""}
         </div>
       `;
@@ -322,6 +346,18 @@ function renderBranchList(branches) {
   });
 }
 
+// 현재 필터에 걸리는 지점을 모두 체크/해제합니다 (지도/동선에 반영하기 위한 일괄 선택).
+function initBranchListBulkEvents() {
+  $("#select-all-branches-btn").addEventListener("click", () => {
+    getFilteredBranches().forEach((b) => selectedBranchIds.add(b.id));
+    renderAll();
+  });
+  $("#deselect-all-branches-btn").addEventListener("click", () => {
+    selectedBranchIds.clear();
+    renderAll();
+  });
+}
+
 function renderUpcoming(branches) {
   const ul = $("#upcoming-list");
   const upcoming = window.Notifications.getUpcomingBranches(branches);
@@ -336,6 +372,34 @@ function renderUpcoming(branches) {
     li.addEventListener("click", () => {
       window.MapModule.focusBranch(b.id);
       openEditModal(b.id);
+    });
+    ul.appendChild(li);
+  });
+}
+
+// 사이드바 "최근 방문 기록" — 모든 지점의 방문 기록을 최신순으로 한눈에 보여줍니다.
+// 클릭하면 해당 지점 모달을 열어 상세 내용을 확인/수정할 수 있습니다.
+function renderRecentVisits() {
+  const ul = $("#recent-visits-list");
+  if (!ul) return;
+  const sorted = [...allVisits].sort((a, b) => (b.checkIn || "").localeCompare(a.checkIn || "")).slice(0, 30);
+  if (!sorted.length) {
+    ul.innerHTML = `<li class="empty">방문 기록이 없습니다.</li>`;
+    return;
+  }
+  ul.innerHTML = "";
+  sorted.forEach((v) => {
+    const li = document.createElement("li");
+    const timeLabel = v.checkOut
+      ? `입장 ${formatVisitTime(v.checkIn)} · 퇴장 ${formatVisitTime(v.checkOut)}`
+      : `입장 ${formatVisitTime(v.checkIn)} · 진행중`;
+    li.innerHTML = `
+      <strong>${v.branchName || "(지점명 없음)"}</strong>
+      <span class="recent-visit-meta">${timeLabel}${v.createdBy ? ` · ${v.createdBy}` : ""}</span>
+    `;
+    li.addEventListener("click", () => {
+      window.MapModule.focusBranch(v.branchId);
+      openEditModal(v.branchId);
     });
     ul.appendChild(li);
   });
@@ -363,6 +427,9 @@ function openAddModal() {
   $("#branch-coords").textContent = "좌표 미설정";
   $("#delete-branch-btn").hidden = true;
   $("#branch-sheet-info").hidden = true;
+  $("#branch-competitor-info").hidden = true;
+  $("#visit-log-section").hidden = true;
+  stopVisitsSubscription();
   pinDropTarget = null;
   lastGeocodedAddress = null;
   $("#branch-modal").hidden = false;
@@ -395,6 +462,8 @@ function openEditModal(id) {
     ? `좌표 설정됨 (${pinDropTarget.lat.toFixed(5)}, ${pinDropTarget.lng.toFixed(5)})`
     : "좌표 미설정";
   $("#delete-branch-btn").hidden = false;
+  $("#visit-log-section").hidden = false;
+  startVisitsSubscription(b.id);
 
   const sheetInfo = $("#branch-sheet-info");
   if (b.source === "sheet") {
@@ -410,6 +479,20 @@ function openEditModal(id) {
     sheetInfo.hidden = true;
   }
 
+  const competitorInfo = $("#branch-competitor-info");
+  if (b.source === "competitor") {
+    competitorInfo.hidden = false;
+    $("#competitor-info-name").textContent = b.competitorName || "-";
+    $("#competitor-info-biz").textContent = b.competitorBizRegNo || "-";
+    $("#competitor-info-ceo").textContent = b.competitorCeo || "-";
+    $("#competitor-info-phone").textContent = [b.competitorPhone1, b.competitorPhone2].filter(Boolean).join(" / ") || "-";
+    $("#competitor-info-contract-start").textContent = b.competitorContractStart || "-";
+    $("#competitor-info-contract-end").textContent = b.competitorContractEnd || "-";
+    $("#competitor-info-terms").textContent = b.competitorContractTerms || "-";
+  } else {
+    competitorInfo.hidden = true;
+  }
+
   $("#branch-modal").hidden = false;
   window.MapModule.enablePinDrop(async (coords) => {
     pinDropTarget = coords;
@@ -423,6 +506,7 @@ function openEditModal(id) {
 function closeModal() {
   $("#branch-modal").hidden = true;
   window.MapModule.disablePinDrop();
+  stopVisitsSubscription();
 }
 
 function initModalEvents() {
@@ -508,6 +592,7 @@ function initModalEvents() {
       lng: pinDropTarget ? pinDropTarget.lng : null,
       createdBy: currentUser ? currentUser.name || currentUser.email : "unknown",
     };
+    let savedId = id;
     if (id) {
       const existing = allBranches.find((x) => x.id === id);
       await window.Store.updateBranch(id, data);
@@ -519,8 +604,13 @@ function initModalEvents() {
           .catch((err) => console.warn("구글시트 비고 동기화 실패:", err.message));
       }
     } else {
-      await window.Store.addBranch(data);
+      savedId = await window.Store.addBranch(data);
     }
+    // 지점목록 전체를 방문기록 전용 시트("지점목록" 탭)에도 반영합니다.
+    // (DATA_SHEET_PROXY_URL 미설정 시 조용히 무시되며 실패해도 로컬 저장은 유지됩니다)
+    window.SheetsImport.pushBranchToSheet("upsert", { branchId: savedId, ...data }).catch((err) =>
+      console.warn("구글시트 지점목록 동기화 실패:", err.message)
+    );
     closeModal();
   });
 
@@ -529,6 +619,9 @@ function initModalEvents() {
     if (!id) return;
     if (!confirm("이 지점을 삭제하시겠습니까?")) return;
     await window.Store.deleteBranch(id);
+    window.SheetsImport.pushBranchToSheet("delete", { branchId: id }).catch((err) =>
+      console.warn("구글시트 지점목록 삭제 동기화 실패:", err.message)
+    );
     closeModal();
   });
 }
@@ -589,6 +682,122 @@ function initModalDragMove() {
   };
   handle.addEventListener("pointerup", stopDragging);
   handle.addEventListener("pointercancel", stopDragging);
+}
+
+// ---------- 방문 기록(입장/퇴장) ----------
+
+function formatVisitTime(iso) {
+  if (!iso) return null;
+  const d = new Date(iso);
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function startVisitsSubscription(branchId) {
+  stopVisitsSubscription();
+  window.Store.onVisitsChange(branchId, (visits) => {
+    currentVisits = visits;
+    renderVisitLog(visits);
+  }).then((unsub) => {
+    visitsUnsub = unsub;
+  });
+}
+
+function stopVisitsSubscription() {
+  if (visitsUnsub) {
+    visitsUnsub();
+    visitsUnsub = null;
+  }
+  currentVisits = [];
+}
+
+function renderVisitLog(visits) {
+  const ul = $("#visit-log-list");
+  const sorted = [...visits].sort((a, b) => (b.checkIn || "").localeCompare(a.checkIn || ""));
+  if (!sorted.length) {
+    ul.innerHTML = `<li class="empty">방문 기록이 없습니다. "입장" 버튼을 눌러 기록을 시작하세요.</li>`;
+    return;
+  }
+  ul.innerHTML = sorted
+    .map(
+      (v) => `
+      <li class="visit-log-item" data-id="${v.id}">
+        <div class="visit-log-item-row">
+          <span class="visit-log-item-time">
+            입장 ${formatVisitTime(v.checkIn) || "-"} · 퇴장
+            ${v.checkOut ? formatVisitTime(v.checkOut) : `<span class="ongoing">진행중</span>`}
+          </span>
+          <button type="button" class="visit-log-item-delete" data-id="${v.id}">삭제</button>
+        </div>
+        <textarea class="visit-log-item-note" data-id="${v.id}" rows="2" placeholder="방문 메모 입력...">${v.note || ""}</textarea>
+      </li>
+    `
+    )
+    .join("");
+
+  $all(".visit-log-item-note").forEach((el) => {
+    el.addEventListener("blur", async () => {
+      const id = el.dataset.id;
+      const visit = currentVisits.find((v) => v.id === id);
+      if (!visit || (visit.note || "") === el.value) return;
+      await window.Store.updateVisit(id, { note: el.value });
+      window.SheetsImport.pushVisitLogToSheet("note", { visitId: id, note: el.value }).catch((err) =>
+        console.warn("구글시트 방문기록 메모 동기화 실패:", err.message)
+      );
+    });
+  });
+
+  $all(".visit-log-item-delete").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const id = btn.dataset.id;
+      if (!confirm("이 방문 기록을 삭제하시겠습니까?")) return;
+      await window.Store.deleteVisit(id);
+      window.SheetsImport.pushVisitLogToSheet("delete", { visitId: id }).catch((err) =>
+        console.warn("구글시트 방문기록 삭제 동기화 실패:", err.message)
+      );
+    });
+  });
+}
+
+function initVisitLogEvents() {
+  $("#visit-checkin-btn").addEventListener("click", async () => {
+    const branchId = $("#branch-id").value;
+    if (!branchId) return;
+    const branch = allBranches.find((b) => b.id === branchId);
+    const now = new Date().toISOString();
+    const createdBy = currentUser ? currentUser.name || currentUser.email : "unknown";
+    const visitId = await window.Store.addVisit({
+      branchId,
+      branchName: branch ? branch.name : "",
+      checkIn: now,
+      checkOut: null,
+      note: "",
+      createdBy,
+    });
+    window.SheetsImport.pushVisitLogToSheet("checkin", {
+      visitId,
+      branchName: branch ? branch.name : "",
+      checkIn: now,
+      createdBy,
+    }).catch((err) => console.warn("구글시트 방문기록 입장 동기화 실패:", err.message));
+  });
+
+  $("#visit-checkout-btn").addEventListener("click", async () => {
+    const branchId = $("#branch-id").value;
+    if (!branchId) return;
+    const open = [...currentVisits]
+      .filter((v) => !v.checkOut)
+      .sort((a, b) => (b.checkIn || "").localeCompare(a.checkIn || ""))[0];
+    if (!open) {
+      alert("진행 중인 입장 기록이 없습니다. 먼저 입장을 눌러주세요.");
+      return;
+    }
+    const now = new Date().toISOString();
+    await window.Store.updateVisit(open.id, { checkOut: now });
+    window.SheetsImport.pushVisitLogToSheet("checkout", { visitId: open.id, checkOut: now }).catch((err) =>
+      console.warn("구글시트 방문기록 퇴장 동기화 실패:", err.message)
+    );
+  });
 }
 
 // ---------- 구글 시트 동기화 ----------
@@ -697,7 +906,7 @@ async function runSheetSync() {
         if (coords) geocoded++;
         await new Promise((r) => setTimeout(r, 350)); // Geocoding API 요청 속도 보호 (200ms→350ms, 대량 가져오기 시 빈번한 실패 방지)
       }
-      await window.Store.addBranch({
+      const newBranch = {
         name: row.name,
         address: resolvedAddress,
         status: row.status,
@@ -718,13 +927,82 @@ async function runSheetSync() {
         sheetExpectedOpenMonth: row.expectedOpenMonth,
         sheetSalesRep: row.salesRep,
         sheetNote: row.note,
-      });
+      };
+      const newId = await window.Store.addBranch(newBranch);
+      window.SheetsImport.pushBranchToSheet("upsert", { branchId: newId, ...newBranch }).catch((err) =>
+        console.warn("구글시트 지점목록 동기화 실패:", err.message)
+      );
       added++;
     }
 
     statusEl.className = "sync-status success";
     const geoNote = ` (좌표 확인 ${geocoded}/${added}건, 나머지는 "전체 좌표 일괄 재검색" 버튼이나 목록의 ⚠표시 항목을 열어 "좌표 찾기"로 보완하세요)`;
     statusEl.textContent = `${added}개 병원을 새로 가져왔습니다.${geoNote}`;
+  } catch (err) {
+    statusEl.className = "sync-status error";
+    statusEl.textContent = err.message;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+// ---------- 경쟁사 거래처 가져오기 ----------
+
+function initCompetitorImportEvents() {
+  $("#import-competitor-btn").addEventListener("click", runCompetitorImport);
+}
+
+// 좌표는 여기서 구하지 않습니다(수천 건이라 매우 오래 걸림). 가져오기만 빠르게 끝내고,
+// 좌표는 "전체 좌표 일괄 재검색" 버튼으로 나눠서 채우도록 안내합니다.
+async function runCompetitorImport() {
+  const btn = $("#import-competitor-btn");
+  const statusEl = $("#competitor-import-status");
+  btn.disabled = true;
+  statusEl.className = "sync-status";
+  statusEl.textContent = "경쟁사 거래처 명단을 불러오는 중...";
+  try {
+    const records = await window.CompetitorImport.fetchCompetitorHospitals();
+    const existingKeys = new Set(allBranches.map((b) => b.competitorKey).filter(Boolean));
+    const newRecords = records.filter((r) => !existingKeys.has(window.CompetitorImport.competitorKey(r)));
+
+    if (!newRecords.length) {
+      statusEl.className = "sync-status success";
+      statusEl.textContent = `새로운 병원이 없습니다. (${records.length}건 모두 이미 등록됨)`;
+      return;
+    }
+
+    statusEl.textContent = `${newRecords.length}건 저장 중... (목록이 커서 잠시 걸릴 수 있습니다)`;
+    const createdBy = currentUser ? currentUser.name || currentUser.email : "competitor-import";
+    const branchDataList = newRecords.map((r) => ({
+      name: r.hospitalName,
+      address: r.address,
+      status: "발굴",
+      priority: "중",
+      openDate: "",
+      contractStartDate: "",
+      assignee: "",
+      requirements: "",
+      lat: null,
+      lng: null,
+      createdBy,
+      source: "competitor",
+      competitorKey: window.CompetitorImport.competitorKey(r),
+      competitorRegion: r.region,
+      competitorName: r.competitor,
+      competitorBizRegNo: r.bizRegNo,
+      competitorCeo: r.ceo,
+      competitorPhone1: r.phone1,
+      competitorPhone2: r.phone2,
+      competitorContractStart: r.contractStart,
+      competitorContractEnd: r.contractEnd,
+      competitorContractTerms: r.contractTerms,
+    }));
+    // addBranch를 건수만큼 반복하면 매번 전체 목록이 재렌더링돼 브라우저가 멎으므로,
+    // 한 번에(또는 Firestore 배치로 나눠) 저장하고 알림은 마지막에 한 번만 받습니다.
+    await window.Store.addBranchesBulk(branchDataList);
+
+    statusEl.className = "sync-status success";
+    statusEl.textContent = `${branchDataList.length}개 병원을 새로 가져왔습니다. 좌표는 아직 없으니 "전체 좌표 일괄 재검색"으로 채워주세요.`;
   } catch (err) {
     statusEl.className = "sync-status error";
     statusEl.textContent = err.message;
@@ -828,7 +1106,10 @@ function init() {
   initAuthScreen();
   initModalEvents();
   initModalDragMove();
+  initBranchListBulkEvents();
+  initVisitLogEvents();
   initSheetSyncEvents();
+  initCompetitorImportEvents();
   initRouteEvents();
   initTopBarEvents();
   // 지도(네이버 지도) 초기화가 데이터 로드보다 늦게 끝나는 경우, 데이터가 먼저 도착하면

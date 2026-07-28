@@ -69,11 +69,10 @@ function cellValue(cell) {
   return String(cell.v).trim();
 }
 
-// 진행현황(L열) -> 영업중 / 계약완료 / 타업체계약 3단계로 정규화
+// 진행현황(L열) -> 영업중 / 계약완료 2단계로 정규화
 function normalizeStatus(raw) {
   const v = (raw || "").trim();
   if (v === "계약완료") return "계약완료";
-  if (v === "타업체계약") return "타업체계약";
   return "영업중"; // 빈 값 등은 기본적으로 진행중인 영업 대상으로 간주
 }
 
@@ -142,9 +141,41 @@ async function pushNoteToSheet(sheetKey, note) {
   }
 }
 
+// 방문기록 전용 구글시트(DATA_SHEET_PROXY_URL)에 데이터를 반영하는 공통 함수.
+// entity: "visit"(방문기록 탭) 또는 "branch"(지점목록 탭).
+// google-apps-script/visit-log.gs 를 배포해 DATA_SHEET_PROXY_URL을 설정한
+// 경우에만 동작하며, 미설정 시 조용히 아무 일도 하지 않습니다(로컬 저장만 유지).
+async function pushToDataSheet(entity, action, payload) {
+  const proxyUrl = window.APP_CONFIG && window.APP_CONFIG.DATA_SHEET_PROXY_URL;
+  if (!proxyUrl) return;
+
+  const res = await fetch(proxyUrl, {
+    method: "POST",
+    headers: { "Content-Type": "text/plain;charset=utf-8" },
+    body: JSON.stringify({ entity, action, ...payload }),
+  });
+  const data = await res.json().catch(() => null);
+  if (!data || !data.ok) {
+    throw new Error((data && data.error) || "구글시트 반영 실패");
+  }
+}
+
+// 방문 기록(입장/퇴장/메모/삭제)을 구글시트 "방문기록" 탭에 반영합니다.
+async function pushVisitLogToSheet(action, payload) {
+  return pushToDataSheet("visit", action, payload);
+}
+
+// 지점(병원) 목록 전체를 구글시트 "지점목록" 탭에 반영합니다.
+// action: "upsert"(추가/수정) 또는 "delete"(삭제)
+async function pushBranchToSheet(action, payload) {
+  return pushToDataSheet("branch", action, payload);
+}
+
 window.SheetsImport = {
   fetchSeoulHospitalsFromSheet,
   sheetRowKey,
   normalizeStatus,
   pushNoteToSheet,
+  pushVisitLogToSheet,
+  pushBranchToSheet,
 };
